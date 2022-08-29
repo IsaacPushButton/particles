@@ -1,0 +1,333 @@
+//! A small snake game done after watching
+//! <https://www.you&tube.com/watch?v=HCwMb0KslX8>
+//! to showcase ggez and how it& relates/differs from piston.
+//!
+//! Note that this example is meant to highlight the general
+//! structure of a ggez game. Some of the details may need to
+//! be changed to scale the game. For example, if we needed to
+//! draw hundreds or thousands of shapes, a SpriteBatch is going
+//! to offer far better performance than the direct draw calls
+//! that this example uses.
+//!
+//! Author: @termhn
+//! Original repo: <https://github.com/termhn/ggez_snake>
+
+use std::ops::Range;
+
+// First we'll import the crates we need for our game;
+// in this case that is just `ggez` and `oorandom` (and `getrandom`
+// to seed the RNG.)
+use oorandom::Rand32;
+use noise::{NoiseFn, Perlin, Clamp};
+
+// Next we need to actually `use` the pieces of ggez that we are going
+// to need frequently.
+use ggez::{
+    event, graphics::{self, Text, Color, InstanceArray, Drawable, DrawParam},
+    input::keyboard::{KeyCode, KeyInput},
+    Context, GameResult, winit::dpi::{Size, Position},
+};
+
+const OFFSETS: [(i32, i32);8] = [
+    (0,1),
+    (0,-1),
+    (1,0),
+    (1,1),
+    (1,-1),
+    (-1,0),
+    (-1,1),
+    (-1,-1)
+];
+
+
+// Values we might want to manually change
+
+const GRID_2: i32 = 480;
+const CELL_SIZE_2: i32 = 4;
+
+const DESIRED_FPS: u32 = 30;
+const NEIGHBOUR_THRESHOLD: i32 = 1;
+
+const N: i32 = 30;
+///////////////////////////////////////////
+
+const GRID_SIZE: (i32, i32) = (GRID_2, GRID_2);
+const GRID_CELL_SIZE: (i32, i32) = (CELL_SIZE_2, CELL_SIZE_2);
+
+
+
+const SCREEN_SIZE: (f32, f32) = (
+    GRID_SIZE.0 as f32 * GRID_CELL_SIZE.0 as f32,
+    GRID_SIZE.1 as f32 * GRID_CELL_SIZE.1 as f32,
+);
+
+const CELLS: usize = (GRID_SIZE.0 * GRID_SIZE.1) as usize;
+const STATE_COLORS: [Color; 18 as usize] = [
+    Color::new(0.1, 0.0, 0.5, 1.0),
+    Color::new(0.2, 0.0, 0.5, 1.0),
+    Color::new(0.3, 0.0, 0.5, 1.0),
+    Color::new(0.4, 0.0, 0.5, 1.0),
+    Color::new(0.5, 0.0, 0.5, 1.0),
+    Color::new(0.6, 0.0, 0.5, 1.0),
+    Color::new(0.7, 0.0, 0.5, 1.0),
+    Color::new(0.8, 0.0, 0.5, 1.0),
+    Color::new(0.9, 0.0, 0.5, 1.0),
+    Color::new(0.1, 0.1, 0.5, 1.0),
+    Color::new(0.2, 0.1, 0.5, 1.0),
+    Color::new(0.3, 0.1, 0.5, 1.0),
+    Color::new(0.4, 0.1, 0.5, 1.0),
+    Color::new(0.5, 0.1, 0.5, 1.0),
+    Color::new(0.6, 0.1, 0.5, 1.0),
+    Color::new(0.7, 0.1, 0.5, 1.0),
+    Color::new(0.8, 0.1, 0.5, 1.0),
+    Color::new(0.9, 0.1, 0.5, 1.0),
+];
+
+
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GridPosition{
+    x: i32,
+    y: i32,
+}
+
+impl From<(i32, i32)> for GridPosition {
+    fn from(pos: (i32, i32)) -> Self {
+        GridPosition { x: pos.0, y: pos.1 }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GridSquare {
+    pos: GridPosition,
+    state: i32,
+    next_state: Option<i32>,
+    living_neighbours: i32,
+    age: i32,
+    gfx_id: Option<i32>
+}
+
+impl From<GridPosition> for graphics::Rect {
+    fn from(grid: GridPosition) -> Self {
+        graphics::Rect::new_i32(
+            grid.x as i32 * GRID_CELL_SIZE.0 as i32,
+            grid.y as i32 * GRID_CELL_SIZE.1 as i32,
+            GRID_CELL_SIZE.0 as i32,
+            GRID_CELL_SIZE.1 as i32,
+        )
+    }
+}
+
+
+impl GridSquare{
+    pub fn draw(&self, canvas: &mut graphics::Canvas, instances: &mut InstanceArray) {
+
+        let color = 0x999999 as f32 / ((self.state as f32 + 1.0) / N as f32);
+        if let Some(i) = self.gfx_id{
+            instances.update(i.try_into().unwrap(),graphics::DrawParam::new()
+            .dest_rect(self.pos.into())
+            .color(Color::from_rgb_u32(color as u32)))
+        }
+
+        //instances.push(graphics::DrawParam::new()
+       // .dest_rect(self.pos.into())
+      //  .color(color));
+       // instances.draw(canvas, graphics::DrawParam::new()
+       // .dest_rect(self.pos.into())
+       // .color(color));
+        
+
+      //  let mut draw_text = Text::new(format!("{}", self.living_neighbours));
+      //  draw_text.set_scale(40.0);
+
+      //  canvas.draw(
+      //       &draw_text,
+      //       graphics::DrawParam::from([self.pos.x as f32 * GRID_CELL_SIZE.0 as f32, self.pos.y as f32 * GRID_CELL_SIZE.1 as f32]).color(color),
+      //   );
+         
+    }
+}
+
+
+fn successor_value(v: i32) -> i32{
+    const ROLLOVER: i32 = N - 1;
+    match v{
+        N => 0,
+        _ => v + 1
+    }
+}
+
+struct GameState {
+    grid: Box<[[GridSquare; GRID_SIZE.0 as usize];GRID_SIZE.1 as usize]>,
+    instances: Option<Box<InstanceArray>>,
+    reset_flag: bool
+}
+
+
+impl GameState {
+    pub fn new() -> Self {
+        let mut seed: [u8; 8] = [0; 8];
+        getrandom::getrandom(&mut seed[..]).expect("Could not create RNG seed");
+        let mut rng = Rand32::new(u64::from_ne_bytes(seed));
+        let max: u32 = N as u32 + 1;
+
+        let mut new_grid = Box::new([[GridSquare{pos: GridPosition { x: 0, y: 0 }, gfx_id:None, state: 0, living_neighbours: 0, age: 0, next_state: None}; GRID_SIZE.0 as usize]; GRID_SIZE.1 as usize]);
+        let mut id = 0;
+        for x in 0..GRID_SIZE.0{
+            for y in 0..GRID_SIZE.1{
+                new_grid[x as usize][y as usize] = GridSquare{
+                    pos: GridPosition { x: x, y: y },
+                    state: rng.rand_range(0..max) as i32,
+                    next_state: None,
+                    living_neighbours: 0,
+                    age: 0,
+                    gfx_id: Some(id)
+                    };
+                id += 1;
+            }
+        }
+        GameState { grid: new_grid, instances: None, reset_flag: false}
+    }
+    
+    fn neighbour_is_successor(&self, pos: GridPosition) -> bool{
+        let mut successor_neighbours = 0;
+        for i in OFFSETS{
+            if let Some(i) = self.try_get_square(pos.x + i.0, pos.y + i.1){
+                if successor_value(self.grid[pos.x as usize][pos.y as usize].state) == i{
+                    successor_neighbours += 1
+                }
+            }
+        }
+
+        successor_neighbours >= NEIGHBOUR_THRESHOLD
+    }
+
+    fn try_get_square(&self, x: i32, y:i32) -> Option<i32>{
+        if x < 1 || x == GRID_SIZE.0 as i32{
+            return Option::None;
+        }
+        if y < 1 || y == GRID_SIZE.1 as i32{
+            return Option::None;
+        }
+        Some(self.grid[x as usize][y as usize].state)
+    }
+    fn randomise_next_state(&mut self){
+        let mut seed: [u8; 8] = [0; 8];
+        getrandom::getrandom(&mut seed[..]).expect("Could not create RNG seed");
+        let max: u32 = N as u32 + 1;
+        let mut rng = Rand32::new(u64::from_ne_bytes(seed));
+        for x in 0..GRID_SIZE.0{
+            for y in 0..GRID_SIZE.1{
+                self.grid[x as usize][y as usize].next_state = Some(rng.rand_range(0..max) as i32);
+            }
+        }
+    }
+    fn calculate_next_state(&mut self){
+        for x in 0..GRID_SIZE.0{
+            for y in 0..GRID_SIZE.1{
+                let neighbour_is_successor = self.neighbour_is_successor(GridPosition { x, y });
+                match neighbour_is_successor{
+                    true => {
+                        self.grid[x as usize][y as usize].next_state = Some(successor_value(self.grid[x as usize][y as usize].state));
+                    },
+                    false => {
+                        self.grid[x as usize][y as usize].next_state = Some(self.grid[x as usize][y as usize].state);
+                    }
+                }
+            }
+        }
+    }
+
+    fn update_states(&mut self){
+        for x in 0..GRID_SIZE.0{
+            for y in 0..GRID_SIZE.1{
+                if let Some(i) = self.grid[x as usize][y as usize].next_state{
+                self.grid[x as usize][y as usize].state = i
+                }
+            }
+        }
+    }
+}
+
+
+impl event::EventHandler<ggez::GameError> for GameState {
+    fn update(&mut self, ctx: &mut Context) -> GameResult {
+        
+        
+        while ctx.time.check_update_time(DESIRED_FPS) {
+            if self.reset_flag {
+                GameState::randomise_next_state(self);
+                self.reset_flag = false;
+            }else{
+                GameState::calculate_next_state(self);
+            }
+            GameState::update_states(self);
+
+        
+        }
+        
+        Ok(())
+    
+    }
+
+    /// draw is where we should actually render the game's current state.
+    fn draw(&mut self, ctx: &mut Context) -> GameResult {
+        // First we create a canvas that renders to the frame, and clear it to a (sort of) green color
+        
+        if self.instances.is_none(){
+            let mut instances = Box::new(InstanceArray::new(ctx,None, CELLS as u32, false));
+            for x in 0..GRID_SIZE.0{
+                for y in 0..GRID_SIZE.1{
+                    instances.push(graphics::DrawParam::new()
+                    .dest_rect(self.grid[x as usize][y as usize].pos.into())
+                    .color(Color::BLACK));
+                }
+            }
+            self.instances = Some(instances);
+        }
+        let mut canvas = graphics::Canvas::from_frame(
+            ctx,
+            graphics::CanvasLoadOp::Clear([0.0, 1.0, 0.0, 1.0].into()),
+        );
+       
+        for x in 0..GRID_SIZE.0{
+            for y in 0..GRID_SIZE.1{
+                self.grid[x as usize][y as usize].draw(&mut canvas, &mut self.instances.as_mut().unwrap());
+            }
+        }
+    
+
+        self.instances.as_ref().unwrap().draw(&mut canvas, DrawParam::new());
+        canvas.finish(ctx)?;
+    
+        ggez::timer::yield_now();
+        Ok(())
+    }
+
+    fn key_down_event(&mut self, _ctx: &mut Context, input: KeyInput, _repeat: bool) -> GameResult {
+        if input.keycode == Some(KeyCode::Space){
+            self.reset_flag = true
+        }
+        Ok(())
+    }
+
+
+}
+
+fn main() -> GameResult {
+    // Here we use a ContextBuilder to setup metadata about our game. First the title and author
+    let (ctx, events_loop) = ggez::ContextBuilder::new("Cellular Automata", "Isaac")
+        // Next we set up the window. This title will be displayed in the title bar of the window.
+        .window_setup(ggez::conf::WindowSetup::default().title("Cells"))
+        // Now we get to set the size of the window, which we use our SCREEN_SIZE constant from earlier to help with
+        .window_mode(ggez::conf::WindowMode::default().dimensions(SCREEN_SIZE.0, SCREEN_SIZE.1))
+        // And finally we attempt to build the context and create the window. If it fails, we panic with the message
+        // "Failed to build ggez context"
+        .build()?;
+
+    // Next we create a new instance of our GameState struct, which implements EventHandler
+    let state = GameState::new();
+
+    // And finally we actually run our game, passing in our context and state.
+    event::run(ctx, events_loop, state)
+}
