@@ -1,3 +1,5 @@
+use std::thread;
+
 use ggez::{
     event, graphics::{self, Text, Color, InstanceArray, Drawable, DrawParam},
     input::keyboard::{KeyCode, KeyInput},
@@ -6,27 +8,36 @@ use ggez::{
 
 use rand::Rng; 
 
-const DESIRED_FPS: u32 = 20;
-const SCREEN_SIZE: (u32, u32) = (3000,2000);
+const DESIRED_FPS: u32 = 30;
+const SCREEN_SIZE: (u32, u32) = (2000,2000);
 
 const PARTICLE_SIZE: i32 = 4;
 
-const N: usize = 3;
+const N: usize = 10;
 const COLOURS: [Color; N] = [
     Color::GREEN,
     Color::RED,
     Color::CYAN,
- //   Color::BLUE,
+    Color::BLUE,
+    Color::YELLOW,
+    Color::WHITE,
+    Color::MAGENTA,
+    Color::new(0.1,0.5,0.0,1.0),
+    Color::new(1.0,0.3,0.3,1.0),
+    Color::new(0.4, 0.9, 0.7,1.0)
 ];
 
-const DENSITY: u32 = 800;
+const DENSITY: u32 = 350;
 
+const MAX_EFFECT_DISTANCE: f32 = 10.0;
+const MAX_GRAVITY: f32 = 1.0;
+const FRICTION: f32 = 0.5;
 
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct GridPosition{
-    x: f64,
-    y: f64,
+    x: f32,
+    y: f32,
 }
 
 impl From<GridPosition> for graphics::Rect {
@@ -40,8 +51,8 @@ impl From<GridPosition> for graphics::Rect {
     }
 }
 
-impl From<(f64, f64)> for GridPosition {
-    fn from(pos: (f64, f64)) -> Self {
+impl From<(f32, f32)> for GridPosition {
+    fn from(pos: (f32, f32)) -> Self {
         GridPosition { x: pos.0, y: pos.1}
     }
 }
@@ -49,8 +60,8 @@ impl From<(f64, f64)> for GridPosition {
 
 struct Particle {
     pos: GridPosition,
-    vx: f64,
-    vy: f64, 
+    vx: f32,
+    vy: f32, 
     colour: Color,
     id: u32
 }
@@ -59,7 +70,7 @@ struct GameState {
     particles: Vec<Vec<Particle>>,
     draw_instances: Option<InstanceArray>,
     obj_count: u32,
-    relations: [(i8, f64, f64); N*N],
+    relations: [(i8, f32, f32); N*N],
     rng: rand::rngs::ThreadRng,
 }
 
@@ -83,11 +94,19 @@ impl GameState{
         game_state
     }
 
-    fn random_relations(&mut self) -> [(i8, f64, f64); N*N]{
+    fn test(&self){
+            println!("hi");
+    }
+
+    fn random_relations(&mut self) -> [(i8, f32, f32); N*N]{
+
+        thread::spawn(|| {
+            self.test()
+        });
+    
         let mut rel = [(0,0.0,0.0);N*N];
         for i in 0..N*N{
-
-            rel[i] = (self.rng.gen::<i8>(), (self.rng.gen::<f64>() - 0.5), (self.rng.gen::<f64>() * 600.0));
+            rel[i] = (self.rng.gen::<i8>(), (self.rng.gen::<f32>() - 0.5) * MAX_GRAVITY, self.rng.gen::<f32>() * MAX_EFFECT_DISTANCE);
         }
         rel
     }
@@ -105,16 +124,16 @@ impl GameState{
         let mut group: Vec<Particle> = Vec::new();
         for n in 0..num{
             let pos = GridPosition{
-                x: self.rng.gen_range(0..SCREEN_SIZE.0 + 1) as f64,
-                y: self.rng.gen_range(0..SCREEN_SIZE.1 + 1) as f64
+                x: self.rng.gen_range(0..SCREEN_SIZE.0 + 1) as f32,
+                y: self.rng.gen_range(0..SCREEN_SIZE.1 + 1) as f32
             };
             
             let particle = Particle{
                 pos: pos,
                 colour: color,
                 id: self.obj_count,
-                vx: self.rng.gen::<f64>() * 10.0,
-                vy: self.rng.gen::<f64>() * 10.0
+                vx: (self.rng.gen::<f32>() - 0.5) * 50.0,
+                vy: (self.rng.gen::<f32>() - 0.5) * 50.0
             };
 
             group.push(
@@ -128,86 +147,124 @@ impl GameState{
     }
 
 
-    fn clamp_to_screen(x: f64, y: f64) -> GridPosition{
+    fn wrap_around_screen(x: f32, y: f32) -> GridPosition{
         let mut rx = x;
         let mut ry = y;
-        if x > SCREEN_SIZE.0 as f64 {
-            rx = x - SCREEN_SIZE.0 as f64; 
+        if x > SCREEN_SIZE.0 as f32 {
+            rx = x - SCREEN_SIZE.0 as f32; 
         }
         if x < 0.0 {
-            rx = SCREEN_SIZE.0 as f64 - x;
+            rx = SCREEN_SIZE.0 as f32 - x;
         } 
     
-        if y > SCREEN_SIZE.1 as f64{
-            ry = y - SCREEN_SIZE.1 as f64; 
+        if y > SCREEN_SIZE.1 as f32{
+            ry = y - SCREEN_SIZE.1 as f32; 
 
         }
         if y < 0.0{
-            ry = SCREEN_SIZE.1 as f64 - y;
+            ry = SCREEN_SIZE.1 as f32 - y;
         }
         GridPosition { x: rx, y: ry }
     }
 
+    fn clamp_to_screen(x: f32, y: f32) -> GridPosition{
+        let mut rx = x;
+        let mut ry = y;
+        
+        if x > SCREEN_SIZE.0 as f32 {
+            rx = SCREEN_SIZE.0 as f32 - 1.0; 
+        }
+        if x < 0.0 {
+            rx = 1.0;
+        } 
+    
+        if y > SCREEN_SIZE.1 as f32{
+            ry = SCREEN_SIZE.1 as f32 - 1.0; 
 
+        }
+        if y < 0.0{
+            ry = 1.0;
+        }
+        GridPosition { x: rx, y: ry }
+    }
+
+    fn regular_distance(x1: f32, x2: f32, y1: f32, y2: f32) -> (f32, f32, f32){
+        let dx = x1 - x2;
+        let dy = y1 - y2;
+        (f32::sqrt((dx * dx) + (dy * dy)), dx, dy)
+
+    }
+    fn toroidal_distance(x1: f32, x2: f32, y1: f32, y2: f32) -> (f32, f32, f32){
+        let mut dx = f32::abs(x2 - x1);
+        let mut dy = f32::abs(y2-y1);
+
+        if dx > 0.5 {
+            dx = 1.0 - dx;
+        }
+ 
+        if dy > 0.5 {
+            dy = 1.0 - dy;
+        }
+        (f32::sqrt(dx*dx + dy*dy),dx, dy)
+
+    }
     fn update_particles(&mut self){
         let mut i = 0;
         for x in 0..N{
             for y in 0..N{
                 self.particle_relation(x, y, i);
                 i += 1;
-
             }
         }
+    
+        for x in 0..self.particles.len(){
+            thread::spawn(|| {
+                for y in 0..self.particles[x].len(){
+                    self.particles[x][y].vx = self.particles[x][y].vx * (1.0 - FRICTION);
+                    self.particles[x][y].vy = self.particles[x][y].vy * (1.0 - FRICTION);
+                    self.particles[x][y].pos.x += self.particles[x][y].vx;
+                    self.particles[x][y].pos.y += self.particles[x][y].vy;
 
+                    self.particles[x][y].pos = GameState::clamp_to_screen(self.particles[x][y].pos.x, self.particles[x][y].pos.y);
+                }
+            });
+        };
     }
+    
+
+    
 
     fn particle_relation(&mut self, x: usize,y: usize, relation_idx: usize){
-      //  if self.relations[relation_idx].0 == 0{
-      //      return
-      //  }
+        if self.relations[relation_idx].0 == 0{
+            return
+        }
+
         for p1 in 0..self.particles[x].len(){
             let mut fx = 0.0;
             let mut fy = 0.0;
             for p2 in 0..self.particles[y].len(){
-                let p1x = self.particles[x][p1].pos.x;
-                let p1y = self.particles[x][p1].pos.y;
-                let p2x = self.particles[y][p2].pos.x;
-                let p2y = self.particles[y][p2].pos.y;
-                let dx = p1x - p2x;
-                let dy = p1y - p2y;
-                let d = (((dx*dx) + (dy*dy))).sqrt();
-                if d > 5.0 && d< self.relations[relation_idx].2 {
+                //let dx = self.particles[x][p1].pos.x - self.particles[y][p2].pos.x;
+                //let dy = self.particles[x][p1].pos.y - self.particles[y][p2].pos.y;
+                let (d, dx, dy) = GameState::regular_distance(
+                        self.particles[x][p1].pos.x,
+                        self.particles[y][p2].pos.x,
+                        self.particles[x][p1].pos.y,
+                        self.particles[y][p2].pos.y
+                    );
+                if d > 50.0 && d< (self.relations[relation_idx].2 * (self.relations[relation_idx].0 as f32) ) {
                     let F = self.relations[relation_idx].1 * (1.0/d);
                     fx += F * dx;
                     fy += F * dy ;
                 }
             }
 
-            self.particles[x][p1].vx = (self.particles[x][p1].vx + fx) * 0.7;
-            self.particles[x][p1].vy = (self.particles[x][p1].vy + fy) * 0.7;
-
-            
-
-
-            // if self.particles[x][p1].pos.x <= 0.0 || self.particles[x][p1].pos.x >= SCREEN_SIZE.0 as f64 { 
-            //     self.particles[x][p1].vx = self.particles[x][p1].vx * -1.0;
-            // }
-            // if self.particles[x][p1].pos.y <= 0.0 || self.particles[x][p1].pos.y >= SCREEN_SIZE.1 as f64 { 
-            //     self.particles[x][p1].vy = self.particles[x][p1].vy * -1.0;
-            // }
-            
-            self.particles[x][p1].pos.x += self.particles[x][p1].vx;
-            self.particles[x][p1].pos.y += self.particles[x][p1].vy;
-
-            self.particles[x][p1].pos = GameState::clamp_to_screen(self.particles[x][p1].pos.x, self.particles[x][p1].pos.y);
+            self.particles[x][p1].vx = (self.particles[x][p1].vx + fx);
+            self.particles[x][p1].vy = (self.particles[x][p1].vy + fy);
 
         }
     }
 
 }
-
-
-
 
 
 impl event::EventHandler<ggez::GameError> for GameState {
@@ -262,8 +319,8 @@ impl event::EventHandler<ggez::GameError> for GameState {
         for x in 0..self.particles.len(){
             for y in 0..self.particles[x].len(){
                 let pos = GridPosition{
-                    x: self.rng.gen_range(0..max_x) as f64,
-                    y: self.rng.gen_range(0..max_y) as f64
+                    x: self.rng.gen_range(0..max_x) as f32,
+                    y: self.rng.gen_range(0..max_y) as f32
                 };
                 self.particles[x][y].pos = pos;
             }
