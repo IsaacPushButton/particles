@@ -1,9 +1,8 @@
-use std::thread;
 
 use ggez::{
-    event, graphics::{self, Text, Color, InstanceArray, Drawable, DrawParam},
-    input::keyboard::{KeyCode, KeyInput},
-    Context, GameResult, winit::dpi::{Size, Position},
+    event, graphics::{self, Color, InstanceArray, Drawable, DrawParam},
+    input::keyboard::{KeyInput},
+    Context, GameResult,
 };
 
 use rand::Rng; 
@@ -11,27 +10,28 @@ use rand::Rng;
 const DESIRED_FPS: u32 = 30;
 const SCREEN_SIZE: (u32, u32) = (2000,2000);
 
-const PARTICLE_SIZE: i32 = 4;
+const PARTICLE_SIZE: i32 = 10;
 
-const N: usize = 10;
-const COLOURS: [Color; N] = [
+const COLOURS: [Color; 4] = [
     Color::GREEN,
     Color::RED,
     Color::CYAN,
     Color::BLUE,
-    Color::YELLOW,
-    Color::WHITE,
-    Color::MAGENTA,
-    Color::new(0.1,0.5,0.0,1.0),
-    Color::new(1.0,0.3,0.3,1.0),
-    Color::new(0.4, 0.9, 0.7,1.0)
+    //Color::YELLOW,
+    // Color::WHITE,
+    // Color::MAGENTA,
+    // Color::new(0.1,0.5,0.0,1.0),
+    // Color::new(1.0,0.3,0.3,1.0),
+    // Color::new(0.4, 0.9, 0.7,1.0)
 ];
 
-const DENSITY: u32 = 350;
+const DENSITY: u32 = 600;
 
-const MAX_EFFECT_DISTANCE: f32 = 10.0;
-const MAX_GRAVITY: f32 = 1.0;
+const MAX_EFFECT_DISTANCE: f32 = 800.0;
+const MAX_GRAVITY: f32 = 2.0;
 const FRICTION: f32 = 0.5;
+
+const ROUND_ROBIN: usize = 2;
 
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -66,27 +66,38 @@ struct Particle {
     id: u32
 }
 
+fn random_f32() -> f32{
+    let mut rng = rand::thread_rng();
+    rng.gen::<f32>()
+}
+
+fn random_f32_range(low: f32, high: f32) -> f32{
+    let mut rng = rand::thread_rng();
+    rng.gen_range(low..high)
+}
+
+fn random_i8() -> i8{
+    let mut rng = rand::thread_rng();
+    rng.gen::<i8>()
+}
+
 struct GameState {
     particles: Vec<Vec<Particle>>,
     draw_instances: Option<InstanceArray>,
     obj_count: u32,
-    relations: [(i8, f32, f32); N*N],
-    rng: rand::rngs::ThreadRng,
+    relations: [(i8, f32, f32); COLOURS.len() * COLOURS.len()],
+    ticks: usize
 }
 
 
 impl GameState{
     fn new() -> Self{
-       // let mut seed: [u8; 8] = [1; 8];
-       // getrandom::getrandom(&mut seed[..]).expect("Could not create RNG seed");
-       // let rng = Rand32::new(u64::from_ne_bytes(seed));
-
         let mut game_state: GameState = GameState{
             particles: Vec::new(),
             draw_instances: None,
             obj_count: 0,
-            relations: [(0,0.0,0.0); N*N],
-            rng: rand::thread_rng()
+            relations: [(0,0.0,0.0); COLOURS.len() * COLOURS.len()],
+            ticks: 1
         };
         
         game_state.init();
@@ -94,46 +105,38 @@ impl GameState{
         game_state
     }
 
-    fn test(&self){
-            println!("hi");
-    }
 
-    fn random_relations(&mut self) -> [(i8, f32, f32); N*N]{
-
-        thread::spawn(|| {
-            self.test()
-        });
-    
-        let mut rel = [(0,0.0,0.0);N*N];
-        for i in 0..N*N{
-            rel[i] = (self.rng.gen::<i8>(), (self.rng.gen::<f32>() - 0.5) * MAX_GRAVITY, self.rng.gen::<f32>() * MAX_EFFECT_DISTANCE);
+    fn random_relations(&mut self) -> [(i8, f32, f32); COLOURS.len() * COLOURS.len()]{
+        let mut rel = [(0,0.0,0.0);COLOURS.len() * COLOURS.len()];
+        for i in 0..COLOURS.len() * COLOURS.len(){
+            rel[i] = (random_i8(), (random_f32() - 0.5) * MAX_GRAVITY, random_f32() * MAX_EFFECT_DISTANCE);
         }
         rel
     }
 
     fn init(&mut self){
-        
         for c in COLOURS{
-            self.create_particles(DENSITY, c);
+            let new_particles = self.create_particles(DENSITY, c);
+            self.particles.push(new_particles);
         }
         self.relations = self.random_relations()
        
     }
 
-    fn create_particles(&mut self, num: u32, color: Color){
+    fn create_particles(&mut self, num: u32, color: Color) -> Vec<Particle>{
         let mut group: Vec<Particle> = Vec::new();
-        for n in 0..num{
+        for _ in 0..num{
             let pos = GridPosition{
-                x: self.rng.gen_range(0..SCREEN_SIZE.0 + 1) as f32,
-                y: self.rng.gen_range(0..SCREEN_SIZE.1 + 1) as f32
+                x: random_f32_range(0.0, SCREEN_SIZE.0 as f32),
+                y: random_f32_range(0.0, SCREEN_SIZE.1 as f32)
             };
             
             let particle = Particle{
                 pos: pos,
                 colour: color,
                 id: self.obj_count,
-                vx: (self.rng.gen::<f32>() - 0.5) * 50.0,
-                vy: (self.rng.gen::<f32>() - 0.5) * 50.0
+                vx: (random_f32() - 0.5) * 50.0,
+                vy: (random_f32() - 0.5) * 50.0
             };
 
             group.push(
@@ -142,18 +145,18 @@ impl GameState{
             self.obj_count += 1;
            
         }
-        self.particles.push(group);
+        group
 
     }
 
 
-    fn wrap_around_screen(x: f32, y: f32) -> GridPosition{
+    fn _wrap_around_screen(x: f32, y: f32) -> GridPosition{
         let mut rx = x;
         let mut ry = y;
-        if x > SCREEN_SIZE.0 as f32 {
-            rx = x - SCREEN_SIZE.0 as f32; 
+        if x > (SCREEN_SIZE.0 - PARTICLE_SIZE as u32) as f32 {
+            rx = (x - SCREEN_SIZE.0 as f32) + PARTICLE_SIZE as f32 ; 
         }
-        if x < 0.0 {
+        if x < PARTICLE_SIZE as f32 {
             rx = SCREEN_SIZE.0 as f32 - x;
         } 
     
@@ -161,8 +164,8 @@ impl GameState{
             ry = y - SCREEN_SIZE.1 as f32; 
 
         }
-        if y < 0.0{
-            ry = SCREEN_SIZE.1 as f32 - y;
+        if y < PARTICLE_SIZE as f32{
+            ry = (SCREEN_SIZE.1 - PARTICLE_SIZE as u32) as f32 - y;
         }
         GridPosition { x: rx, y: ry }
     }
@@ -194,7 +197,7 @@ impl GameState{
         (f32::sqrt((dx * dx) + (dy * dy)), dx, dy)
 
     }
-    fn toroidal_distance(x1: f32, x2: f32, y1: f32, y2: f32) -> (f32, f32, f32){
+    fn _toroidal_distance(x1: f32, x2: f32, y1: f32, y2: f32) -> (f32, f32, f32){
         let mut dx = f32::abs(x2 - x1);
         let mut dy = f32::abs(y2-y1);
 
@@ -210,56 +213,56 @@ impl GameState{
     }
     fn update_particles(&mut self){
         let mut i = 0;
-        for x in 0..N{
-            for y in 0..N{
-                self.particle_relation(x, y, i);
+        for x in 0..COLOURS.len(){
+            for y in 0..COLOURS.len(){
+                self.particle_relation(x, y, i as usize);
                 i += 1;
             }
+        
         }
-    
         for x in 0..self.particles.len(){
-            thread::spawn(|| {
-                for y in 0..self.particles[x].len(){
-                    self.particles[x][y].vx = self.particles[x][y].vx * (1.0 - FRICTION);
-                    self.particles[x][y].vy = self.particles[x][y].vy * (1.0 - FRICTION);
-                    self.particles[x][y].pos.x += self.particles[x][y].vx;
-                    self.particles[x][y].pos.y += self.particles[x][y].vy;
+                for y in 0..self.particles[x].len(){ 
+                    let particle = &mut self.particles[x][y];
+  
+                    particle.vx = particle.vx * (1.0 - FRICTION);
+                    particle.vy = particle.vy * (1.0 - FRICTION);
+                    particle.pos.x += particle.vx;
+                    particle.pos.y += particle.vy;
 
-                    self.particles[x][y].pos = GameState::clamp_to_screen(self.particles[x][y].pos.x, self.particles[x][y].pos.y);
-                }
-            });
-        };
+                    particle.pos = GameState::_wrap_around_screen(particle.pos.x, particle.pos.y);
+
+                    
+                };
+            };
+        self.ticks = self.ticks+1;
     }
     
 
     
 
-    fn particle_relation(&mut self, x: usize,y: usize, relation_idx: usize){
-        if self.relations[relation_idx].0 == 0{
-            return
-        }
-
-        for p1 in 0..self.particles[x].len(){
+    fn particle_relation(&mut self, colour_a: usize, colour_b: usize, relation_idx: usize){
+        for p1 in 0..self.particles[colour_a].len(){
+            if p1 % ROUND_ROBIN == (self.ticks % ROUND_ROBIN){
+                continue
+            }
             let mut fx = 0.0;
             let mut fy = 0.0;
-            for p2 in 0..self.particles[y].len(){
-                //let dx = self.particles[x][p1].pos.x - self.particles[y][p2].pos.x;
-                //let dy = self.particles[x][p1].pos.y - self.particles[y][p2].pos.y;
+            for p2 in 0..self.particles[colour_b].len(){
                 let (d, dx, dy) = GameState::regular_distance(
-                        self.particles[x][p1].pos.x,
-                        self.particles[y][p2].pos.x,
-                        self.particles[x][p1].pos.y,
-                        self.particles[y][p2].pos.y
+                        self.particles[colour_a][p1].pos.x,
+                        self.particles[colour_b][p2].pos.x,
+                        self.particles[colour_a][p1].pos.y,
+                        self.particles[colour_b][p2].pos.y
                     );
-                if d > 50.0 && d< (self.relations[relation_idx].2 * (self.relations[relation_idx].0 as f32) ) {
-                    let F = self.relations[relation_idx].1 * (1.0/d);
-                    fx += F * dx;
-                    fy += F * dy ;
+                if d > 50.0 && d< self.relations[relation_idx].2{
+                    let f = self.relations[relation_idx].1 * (1.0/d);
+                    fx += f * dx;
+                    fy += f * dy;
                 }
             }
 
-            self.particles[x][p1].vx = (self.particles[x][p1].vx + fx);
-            self.particles[x][p1].vy = (self.particles[x][p1].vy + fy);
+            self.particles[colour_a][p1].vx = self.particles[colour_a][p1].vx + fx;
+            self.particles[colour_a][p1].vy = self.particles[colour_a][p1].vy + fy;
 
         }
     }
@@ -270,7 +273,7 @@ impl GameState{
 impl event::EventHandler<ggez::GameError> for GameState {
 
     fn update(&mut self, ctx: &mut Context) -> GameResult {
-
+        
         while ctx.time.check_update_time(DESIRED_FPS) {
             self.update_particles();
         }
@@ -312,15 +315,13 @@ impl event::EventHandler<ggez::GameError> for GameState {
         Ok(())
     }
 
-    fn key_down_event(&mut self, _ctx: &mut Context, input: KeyInput, _repeat: bool) -> GameResult {
-        let max_x: u32 = SCREEN_SIZE.0 + 1;
-        let max_y: u32 = SCREEN_SIZE.1 + 1;
-
+    fn key_down_event(&mut self, _ctx: &mut Context, _input: KeyInput, _repeat: bool) -> GameResult {
+       
         for x in 0..self.particles.len(){
             for y in 0..self.particles[x].len(){
                 let pos = GridPosition{
-                    x: self.rng.gen_range(0..max_x) as f32,
-                    y: self.rng.gen_range(0..max_y) as f32
+                    x: random_f32_range(0.0, SCREEN_SIZE.0 as f32) ,
+                    y: random_f32_range(0.0, SCREEN_SIZE.1 as f32)
                 };
                 self.particles[x][y].pos = pos;
             }
